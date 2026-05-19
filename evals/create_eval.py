@@ -1,4 +1,4 @@
-"""Create an OpenAI eval definition for health query routing.
+"""Create an OpenAI eval definition for health workflow output quality.
 
 Usage:
     uv run python evals/create_eval.py [--eval-name NAME]
@@ -16,7 +16,7 @@ import sys
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create an OpenAI eval definition for health query routing."
+        description="Create an OpenAI eval definition for health workflow output quality."
     )
     parser.add_argument(
         "--eval-name",
@@ -52,20 +52,50 @@ def main(argv: list[str] | None = None) -> None:
                 "type": "object",
                 "properties": {
                     "input_text": {"type": "string"},
-                    "expected_category": {"type": "string"},
                 },
-                "required": ["input_text", "expected_category"],
+                "required": ["input_text"],
             },
             "include_sample_schema": True,
         },
         testing_criteria=[
             {
-                "type": "string_check",
-                "name": "Routing correctness",
-                "input": "{{ sample.output_text }}",
-                "operation": "eq",
-                "reference": "{{ item.expected_category }}",
-            }
+                "type": "label_model",
+                "name": "Relevance",
+                "model": "gpt-4o-mini",
+                "input": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are evaluating a health assistant response. "
+                            "A response is RELEVANT if it meaningfully addresses the user's query — "
+                            "including a polite refusal when the query is harmful or out of scope."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": "Query: {{ item.input_text }}\n\nResponse: {{ sample.output_text }}\n\nIs this response relevant to the query?",
+                    },
+                ],
+                "labels": ["relevant", "not_relevant"],
+                "passing_labels": ["relevant"],
+            },
+            {
+                "type": "label_model",
+                "name": "Politeness",
+                "model": "gpt-4o-mini",
+                "input": [
+                    {
+                        "role": "system",
+                        "content": "You are evaluating the tone of a health assistant response.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Response: {{ sample.output_text }}\n\nIs this response polite and appropriate in tone?",
+                    },
+                ],
+                "labels": ["polite", "impolite"],
+                "passing_labels": ["polite"],
+            },
         ],
     )
 

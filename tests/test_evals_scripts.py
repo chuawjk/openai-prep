@@ -5,6 +5,7 @@ These tests are purely unit/env-guard tests — no live API calls are made.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -71,10 +72,10 @@ class TestCreateEvalArgParsing:
 
 
 class TestCreateEvalCallsAPI:
-    """create_eval.main() must call client.evals.create with correct arguments."""
+    """create_eval.main() must call client.evals.create with label_model graders."""
 
-    def test_calls_evals_create_with_string_check_grader(self, monkeypatch, capsys):
-        """When OPENAI_API_KEY is set, main() calls client.evals.create once."""
+    def test_calls_evals_create_with_label_model_graders(self, monkeypatch, capsys):
+        """When OPENAI_API_KEY is set, main() calls client.evals.create with two label_model graders."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
 
         mock_eval = MagicMock()
@@ -91,15 +92,43 @@ class TestCreateEvalCallsAPI:
         mock_client.evals.create.assert_called_once()
         call_kwargs = mock_client.evals.create.call_args[1]
 
-        # Verify testing_criteria contains a string_check grader
+        # Verify testing_criteria contains two label_model graders
         criteria = call_kwargs["testing_criteria"]
-        assert len(criteria) == 1
-        assert criteria[0]["type"] == "string_check"
-        assert criteria[0]["operation"] == "eq"
+        assert len(criteria) == 2
+        grader_types = [c["type"] for c in criteria]
+        assert all(t == "label_model" for t in grader_types), (
+            f"Expected all graders to be 'label_model', got: {grader_types}"
+        )
+
+        # Verify grader names
+        grader_names = [c["name"] for c in criteria]
+        assert "Relevance" in grader_names
+        assert "Politeness" in grader_names
 
         # Verify eval id is printed
         captured = capsys.readouterr()
         assert "eval_test_123" in captured.out
+
+    def test_item_schema_has_no_expected_category(self, monkeypatch):
+        """The item_schema must only require input_text, not expected_category."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+
+        mock_eval = MagicMock()
+        mock_eval.id = "eval_test_456"
+
+        mock_client = MagicMock()
+        mock_client.evals.create.return_value = mock_eval
+
+        import create_eval  # noqa: PLC0415
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            create_eval.main([])
+
+        call_kwargs = mock_client.evals.create.call_args[1]
+        schema = call_kwargs["data_source_config"]["item_schema"]
+        required_fields = schema.get("required", [])
+        assert "expected_category" not in required_fields
+        assert "input_text" in required_fields
 
 
 # ---------------------------------------------------------------------------
@@ -184,3 +213,37 @@ class TestRunEvalMissingDataset:
             run_eval.main(["--eval-id", "eval_abc", "--dataset", missing_path])
 
         assert exc_info.value.code == 1
+
+
+class TestRunEvalWorkflowOutputShape:
+    """run_eval._collect_outputs produces rows with item + sample.output_text shape."""
+
+    def test_collect_outputs_row_shape(self, monkeypatch, tmp_path):
+        """_collect_outputs returns rows with 'item' and 'sample.output_text'."""
+        import asyncio
+
+        # Write a minimal dataset
+        dataset_file = tmp_path / "test_queries.jsonl"
+        dataset_file.write_text(
+            json.dumps({"input_text": "What are symptoms of flu?"}) + "\n"
+            + json.dumps({"input_text": "Help me plan a workout."}) + "\n"
+        )
+
+        mock_run_workflow = AsyncMock(return_value={"output_text": "test response"})
+
+        import run_eval  # noqa: PLC0415
+
+        with patch("openai_prep.run_workflow", mock_run_workflow):
+            with patch("openai_prep.WorkflowInput") as mock_wi:
+                mock_wi.side_effect = lambda input_as_text: input_as_text
+                rows = asyncio.run(
+                    run_eval._collect_outputs(str(dataset_file))
+                )
+
+        assert len(rows) == 2
+        for row in rows:
+            assert "item" in row
+            assert "sample" in row
+            assert "output_text" in row["sample"]
+            assert row["sample"]["output_text"] == "test response"
+            assert "input_text" in row["item"]
