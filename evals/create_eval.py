@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> None:
                 },
                 "required": ["input_text"],
             },
-            "include_sample_schema": True,
+            "include_sample_schema": False,
         },
         testing_criteria=[
             {
