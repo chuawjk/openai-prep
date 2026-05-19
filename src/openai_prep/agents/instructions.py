@@ -38,7 +38,7 @@ SYNTHESIS_INSTRUCTIONS = (
     "Synthesise recommender agent and/or information agent responses to give a "
     "helpful and relevant response to the health question from the user. Your "
     "response must strictly be based on the output from either one or both of "
-    "these agents"
+    "these agents."
 )
 
 REJECTION_INSTRUCTIONS = "Politely decline the user's request. Do not provide other information"

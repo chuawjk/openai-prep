@@ -31,20 +31,24 @@ def test_agent_factories_match_prototype_constructor_arguments(monkeypatch):
 
     fake_tool = object()
 
-    monkeypatch.setattr("openai_prep.agents.factories.Agent", FakeAgent)
-    monkeypatch.setattr("openai_prep.agents.factories.ModelSettings", FakeModelSettings)
+    # Patch at the agents SDK level so the deferred imports inside _create_agent
+    # and _create_model_settings pick up the fakes instead of the real SDK classes.
+    import agents as _agents_sdk
+
+    monkeypatch.setattr(_agents_sdk, "Agent", FakeAgent)
+    monkeypatch.setattr(_agents_sdk, "ModelSettings", FakeModelSettings)
     monkeypatch.setattr(
-        "openai_prep.agents.factories.create_healthhub_search_tool",
+        "openai_prep.tools.create_healthhub_search_tool",
         lambda search_config: fake_tool,
     )
 
-    from openai_prep.agents.factories import (
-        create_information_agent,
-        create_orchestrator_agent,
-        create_recommender_agent,
-        create_rejection_agent,
-        create_synthesis_agent,
-    )
+    # Deferred imports ensure monkeypatching above takes effect before the
+    # module-level SDK references are resolved inside each factory function.
+    from openai_prep.agents.information import create_information_agent
+    from openai_prep.agents.orchestrator import create_orchestrator_agent
+    from openai_prep.agents.recommender import create_recommender_agent
+    from openai_prep.agents.rejection import create_rejection_agent
+    from openai_prep.agents.synthesis import create_synthesis_agent
 
     agents = [
         create_orchestrator_agent(),
@@ -100,14 +104,20 @@ def test_information_agent_passes_healthhub_search_config(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    monkeypatch.setattr("openai_prep.agents.factories.Agent", FakeAgent)
-    monkeypatch.setattr("openai_prep.agents.factories.ModelSettings", FakeModelSettings)
+    # Patch at the agents SDK level so the deferred imports inside _create_agent
+    # and _create_model_settings pick up the fakes instead of the real SDK classes.
+    import agents as _agents_sdk
+
+    monkeypatch.setattr(_agents_sdk, "Agent", FakeAgent)
+    monkeypatch.setattr(_agents_sdk, "ModelSettings", FakeModelSettings)
     monkeypatch.setattr(
-        "openai_prep.agents.factories.create_healthhub_search_tool",
+        "openai_prep.tools.create_healthhub_search_tool",
         lambda search_config: seen_search_configs.append(search_config) or "tool",
     )
 
-    from openai_prep.agents.factories import create_information_agent
+    # Deferred import ensures monkeypatching above takes effect before the
+    # module-level SDK references are resolved inside the factory function.
+    from openai_prep.agents.information import create_information_agent
 
     config = default_config()
     agent = create_information_agent(config)
@@ -126,10 +136,16 @@ def test_agent_factories_use_supplied_config_overrides(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    monkeypatch.setattr("openai_prep.agents.factories.Agent", FakeAgent)
-    monkeypatch.setattr("openai_prep.agents.factories.ModelSettings", FakeModelSettings)
+    # Patch at the agents SDK level so the deferred imports inside _create_agent
+    # and _create_model_settings pick up the fakes instead of the real SDK classes.
+    import agents as _agents_sdk
 
-    from openai_prep.agents.factories import create_orchestrator_agent
+    monkeypatch.setattr(_agents_sdk, "Agent", FakeAgent)
+    monkeypatch.setattr(_agents_sdk, "ModelSettings", FakeModelSettings)
+
+    # Deferred import ensures monkeypatching above takes effect before the
+    # module-level SDK references are resolved inside the factory function.
+    from openai_prep.agents.orchestrator import create_orchestrator_agent
 
     config = default_config()
     overridden = replace(
@@ -161,13 +177,19 @@ def test_create_agents_returns_all_agents(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    monkeypatch.setattr("openai_prep.agents.factories.Agent", FakeAgent)
-    monkeypatch.setattr("openai_prep.agents.factories.ModelSettings", FakeModelSettings)
+    # Patch at the agents SDK level so the deferred imports inside _create_agent
+    # and _create_model_settings pick up the fakes instead of the real SDK classes.
+    import agents as _agents_sdk
+
+    monkeypatch.setattr(_agents_sdk, "Agent", FakeAgent)
+    monkeypatch.setattr(_agents_sdk, "ModelSettings", FakeModelSettings)
     monkeypatch.setattr(
-        "openai_prep.agents.factories.create_healthhub_search_tool",
+        "openai_prep.tools.create_healthhub_search_tool",
         lambda search_config: object(),
     )
 
+    # Deferred import ensures monkeypatching above takes effect before the
+    # module-level SDK references are resolved inside the factory functions.
     from openai_prep.agents.factories import AgentFactories, create_agents
 
     agents = create_agents()

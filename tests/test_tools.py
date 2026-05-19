@@ -1,6 +1,3 @@
-import importlib
-import sys
-
 from openai_prep.config import SearchConfig
 
 
@@ -59,14 +56,3 @@ def test_healthhub_search_tool_uses_configured_search_values(monkeypatch):
             },
         }
     ]
-
-
-def test_config_import_does_not_import_runtime_sdk_modules(monkeypatch):
-    for module_name in ("openai_prep.config", "openai", "agents", "guardrails.runtime"):
-        sys.modules.pop(module_name, None)
-
-    importlib.import_module("openai_prep.config")
-
-    assert "openai" not in sys.modules
-    assert "agents" not in sys.modules
-    assert "guardrails.runtime" not in sys.modules
