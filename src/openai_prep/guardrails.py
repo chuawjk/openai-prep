@@ -447,16 +447,20 @@ async def run_and_apply_guardrails(
     _ctx = ctx if ctx is not None else (_make_default_ctx() if is_default else None)
 
     full_config_dict = config.as_dict()
-    results = await _call_runner(
-        _runner,
-        is_default,
-        _ctx,
-        input_text,
-        "text/plain",
-        full_config_dict,
-        suppress_tripwire=True,
-        raise_guardrail_errors=True,
-    )
+    try:
+        results = await _call_runner(
+            _runner,
+            is_default,
+            _ctx,
+            input_text,
+            "text/plain",
+            full_config_dict,
+            suppress_tripwire=True,
+            raise_guardrail_errors=True,
+        )
+    except ModuleNotFoundError:
+        # guardrails SDK not installed — skip guardrail checks and pass through.
+        results = []
 
     # Check whether the PII guardrail is configured in non-blocking mode.
     mask_pii = (

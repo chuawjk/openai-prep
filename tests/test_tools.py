@@ -1,3 +1,5 @@
+from openai.types.responses.web_search_tool import Filters as WebSearchToolFilters
+
 from openai_prep.config import SearchConfig
 
 
@@ -17,7 +19,7 @@ def test_healthhub_search_tool_matches_prototype(monkeypatch):
     assert isinstance(tool, FakeWebSearchTool)
     assert calls == [
         {
-            "filters": {"allowed_domains": ["healthhub.sg"]},
+            "filters": WebSearchToolFilters(allowed_domains=["healthhub.sg"]),
             "search_context_size": "medium",
             "user_location": {
                 "country": "SG",
@@ -48,7 +50,7 @@ def test_healthhub_search_tool_uses_configured_search_values(monkeypatch):
 
     assert calls == [
         {
-            "filters": {"allowed_domains": ["healthhub.sg"]},
+            "filters": WebSearchToolFilters(allowed_domains=["healthhub.sg"]),
             "search_context_size": "low",
             "user_location": {
                 "country": "SG",

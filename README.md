@@ -28,6 +28,13 @@ uv run pytest
 
 Tests should use mocks or deterministic fixtures for OpenAI, guardrail, and web-search behavior. The CI test suite is expected to run mocked tests only and must not require `OPENAI_API_KEY` or any other secret.
 
-## Optional Live Verification
+## Live Verification
 
-Live verification is a local manual check only. It requires a valid `OPENAI_API_KEY` in `.env` and may depend on live model or service behavior, so it should not be added to CI or treated as a deterministic automated test.
+To run one live end-to-end workflow invocation:
+
+```bash
+export OPENAI_API_KEY=<your-key>
+uv run python -m openai_prep.verify
+```
+
+This requires a valid `OPENAI_API_KEY` in your shell environment and makes real calls to the OpenAI API. Do not add this command to CI or automated test runs.
