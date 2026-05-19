@@ -23,7 +23,7 @@ wheels = [
 [[package]]
 name = "openai-prep"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 
 [package.dev-dependencies]
 dev = [
