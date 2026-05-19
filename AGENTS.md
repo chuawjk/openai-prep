@@ -16,11 +16,12 @@
 
 - AI Engineer Agent:
   - Owns implementation of user stories and unit tests.
+  - Owns running the relevant test suite for its assigned story.
   - Plans implementation before coding.
   - Sends the plan to the Tech Lead Agent for review before starting implementation.
   - Implements only after Tech Lead approval.
   - Works on a feature branch, never directly on the protected default branch.
-  - Opens a pull request with a clear, human-readable description.
+  - Opens and updates its own pull request with a clear, human-readable description.
   - Labels all GitHub PR descriptions and comments with `AI Engineer Agent:`.
   - Responds to Tech Lead review comments with code changes, test updates, or clear rationale.
   - Updates the PR description when material scope, behavior, or test coverage changes.
@@ -50,8 +51,8 @@
 - Tech Lead must approve or request plan changes before implementation starts.
 - AI Engineer creates a feature branch after plan approval.
 - AI Engineer implements the story and relevant unit tests.
-- AI Engineer runs the relevant test suite before opening or updating a PR.
-- AI Engineer opens a PR with:
+- AI Engineer runs the relevant test suite for its assigned story before opening or updating a PR.
+- AI Engineer opens its own PR with:
   - `AI Engineer Agent:` prefix in the description.
   - Summary of user-visible behavior.
   - Key implementation notes.
@@ -60,7 +61,9 @@
 - Tech Lead reviews the PR and leaves GitHub comments with `Tech Lead Agent:` prefix.
 - If changes are requested:
   - AI Engineer addresses each actionable comment.
+  - AI Engineer reruns the relevant test suite.
   - AI Engineer pushes updates to the same feature branch.
+  - AI Engineer updates the PR description if the scope, behavior, or test coverage changed.
   - AI Engineer comments with `AI Engineer Agent:` summarizing what changed.
   - Tech Lead reviews again.
 - When Tech Lead review passes:
