@@ -198,7 +198,8 @@ def test_trace_metadata_returns_fresh_dicts():
 
 def test_importing_config_is_safe_without_credentials_or_runtime_initialization(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    sys.modules.pop("openai_prep.config", None)
+    for module_name in ("openai_prep.config", "openai", "agents", "guardrails.runtime"):
+        sys.modules.pop(module_name, None)
 
     module = importlib.import_module("openai_prep.config")
 
