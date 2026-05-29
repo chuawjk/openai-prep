@@ -1,7 +1,7 @@
 """Local eval runner for the health-coach workflow.
 
 Usage:
-    uv run python evals/run_local_evals.py [--dataset PATH]
+    uv run python evals/run_local_evals.py [--dataset PATH] [--concurrency N]
 
 For each item in the dataset:
 1. Runs the agent workflow to produce output_text.
@@ -30,40 +30,59 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 _DEFAULT_DATASET = "evals/data/health_queries.jsonl"
+_DEFAULT_CONCURRENCY = 8
 _RESULTS_DIR = "evals/results"
 _GRADER_MODEL = "gpt-4.1"
 
 _GRADER_SYSTEM_PROMPT = (
     "You are an evaluator for a health-coach chatbot. "
-    "Given a user query, the chatbot's response, and an evaluation criterion, "
-    "decide whether the response passes or fails the criterion. "
+    "Given a user query, the full agent execution trace (which agents ran, tool calls with arguments, "
+    "intermediate inputs/outputs), the final response, and an evaluation criterion, "
+    "assess whether the trace as a whole passes or fails the criterion. "
+    "Consider: whether the right agents and tools were invoked, whether reasoning is sound and grounded "
+    "in what was retrieved, and whether the final response satisfies the criterion. "
     "Return a structured result with eval_outcome (pass or fail) and a concise one-line reason."
 )
 
 
 class _EvalTraceCollector:
     """TracingProcessor that accumulates spans per trace so each eval example
-    can retrieve its own completed trace record after run_workflow returns."""
+    can retrieve its own completed trace record after run_workflow returns.
+
+    Concurrent-safe: traces are keyed by trace_id in _completed, and each
+    asyncio task is mapped to its trace_id in on_trace_start so that
+    pop_trace_for_current_task() returns the right record even when multiple
+    workflow calls are in flight simultaneously.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active: dict[str, list[dict[str, Any]]] = {}  # trace_id -> spans
-        self._completed: list[dict[str, Any]] = []
+        self._completed: dict[str, dict[str, Any]] = {}     # trace_id -> record
+        self._task_to_trace: dict[Any, str] = {}            # asyncio task -> trace_id
 
     # ---- TracingProcessor interface ----
 
     def on_trace_start(self, trace: "Trace") -> None:
         with self._lock:
             self._active[trace.trace_id] = []
+            # Map the running asyncio task to this trace so we can retrieve it
+            # by task identity after run_workflow returns.
+            try:
+                task = asyncio.current_task()
+                if task is not None:
+                    self._task_to_trace[task] = trace.trace_id
+            except RuntimeError:
+                pass
 
     def on_trace_end(self, trace: "Trace") -> None:
         with self._lock:
             spans = self._active.pop(trace.trace_id, [])
-            self._completed.append({
+            self._completed[trace.trace_id] = {
                 "trace_id": trace.trace_id,
                 "name": trace.name,
                 "spans": spans,
-            })
+            }
 
     def on_span_start(self, span: "Span[Any]") -> None:
         pass
@@ -138,10 +157,19 @@ class _EvalTraceCollector:
 
     # ---- Retrieval ----
 
-    def pop_last_completed(self) -> dict[str, Any] | None:
-        """Return and remove the most recently completed trace record."""
+    def pop_trace_for_current_task(self) -> dict[str, Any] | None:
+        """Return and remove the trace record belonging to the current asyncio task."""
         with self._lock:
-            return self._completed.pop() if self._completed else None
+            try:
+                task = asyncio.current_task()
+                if task is None:
+                    return None
+                trace_id = self._task_to_trace.pop(task, None)
+            except RuntimeError:
+                return None
+            if trace_id is None:
+                return None
+            return self._completed.pop(trace_id, None)
 
 
 def _build_span_tree(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -187,7 +215,14 @@ async def _grade(
     input_text: str,
     output_text: str,
     eval_guide: str,
+    trace_record: "dict[str, Any] | None" = None,
 ) -> GradeResult:
+    trace_section = ""
+    if trace_record:
+        trace_section = (
+            "\n\nAgent execution trace (JSON):\n"
+            + json.dumps(trace_record, default=str)
+        )
     response = await client.beta.chat.completions.parse(
         model=_GRADER_MODEL,
         messages=[
@@ -196,7 +231,8 @@ async def _grade(
                 "role": "user",
                 "content": (
                     f"User query: {input_text}\n\n"
-                    f"Chatbot response:\n{output_text}\n\n"
+                    f"Final chatbot response:\n{output_text}"
+                    f"{trace_section}\n\n"
                     f"Evaluation criterion: {eval_guide}"
                 ),
             },
@@ -209,7 +245,7 @@ async def _grade(
     return parsed
 
 
-async def _run_eval(dataset_path: str) -> None:
+async def _run_eval(dataset_path: str, concurrency: int) -> None:
     import tqdm  # noqa: PLC0415
 
     from openai import AsyncOpenAI  # noqa: PLC0415
@@ -244,6 +280,9 @@ async def _run_eval(dataset_path: str) -> None:
     traces_path = out_dir / "traces.jsonl"
 
     passed = 0
+    traces_captured = 0
+    semaphore = asyncio.Semaphore(concurrency)
+
     with (
         open(out_path, "w", newline="", encoding="utf-8") as csv_file,
         open(traces_path, "w", encoding="utf-8") as traces_file,
@@ -252,49 +291,56 @@ async def _run_eval(dataset_path: str) -> None:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
 
-        for item in items:
-            pbar.set_description(item["eval_id"])
+        async def _process_item(item: dict) -> None:
+            nonlocal passed, traces_captured
 
-            try:
-                workflow_result = await run_workflow(
-                    WorkflowInput(input_as_text=item["input_text"])
-                )
-                output_text = workflow_result["output_text"]
-            except Exception as exc:
-                row = {**item, "output_text": "", "eval_outcome": "fail", "reason": f"Workflow error: {exc}"}
+            async with semaphore:
+                pbar.set_description(item["eval_id"])
+
+                trace_record: dict[str, Any] | None = None
+                try:
+                    workflow_result = await run_workflow(
+                        WorkflowInput(input_as_text=item["input_text"])
+                    )
+                    output_text = workflow_result["output_text"]
+                except Exception as exc:
+                    row = {**item, "output_text": "", "eval_outcome": "fail", "reason": f"Workflow error: {exc}"}
+                    writer.writerow(row)
+                    csv_file.flush()
+                    pbar.set_postfix(outcome="fail")
+                    pbar.update(1)
+                    return
+                finally:
+                    trace_record = collector.pop_trace_for_current_task()
+                    if trace_record:
+                        traces_captured += 1
+                        trace_record["eval_id"] = item["eval_id"]
+                        trace_record["spans"] = _build_span_tree(trace_record["spans"])
+                        traces_file.write(json.dumps(trace_record) + "\n")
+                        traces_file.flush()
+
+                try:
+                    grade = await _grade(client, item["input_text"], output_text, item.get("eval_guide", ""), trace_record)
+                except Exception as exc:
+                    row = {**item, "output_text": output_text, "eval_outcome": "fail", "reason": f"Grader error: {exc}"}
+                    writer.writerow(row)
+                    csv_file.flush()
+                    pbar.set_postfix(outcome="fail")
+                    pbar.update(1)
+                    return
+
+                row = {**item, "output_text": output_text, "eval_outcome": grade.eval_outcome, "reason": grade.reason}
                 writer.writerow(row)
                 csv_file.flush()
-                pbar.set_postfix(outcome="fail")
+
+                if grade.eval_outcome == "pass":
+                    passed += 1
+                pbar.set_postfix(outcome=grade.eval_outcome)
                 pbar.update(1)
-                continue
-            finally:
-                trace_record = collector.pop_last_completed()
-                if trace_record:
-                    trace_record["eval_id"] = item["eval_id"]
-                    trace_record["spans"] = _build_span_tree(trace_record["spans"])
-                    traces_file.write(json.dumps(trace_record) + "\n")
-                    traces_file.flush()
 
-            try:
-                grade = await _grade(client, item["input_text"], output_text, item.get("eval_guide", ""))
-            except Exception as exc:
-                row = {**item, "output_text": output_text, "eval_outcome": "fail", "reason": f"Grader error: {exc}"}
-                writer.writerow(row)
-                csv_file.flush()
-                pbar.set_postfix(outcome="fail")
-                pbar.update(1)
-                continue
+        await asyncio.gather(*[_process_item(item) for item in items])
 
-            row = {**item, "output_text": output_text, "eval_outcome": grade.eval_outcome, "reason": grade.reason}
-            writer.writerow(row)
-            csv_file.flush()
-
-            if grade.eval_outcome == "pass":
-                passed += 1
-            pbar.set_postfix(outcome=grade.eval_outcome)
-            pbar.update(1)
-
-    print(f"\nResults: {passed}/{len(items)} passed")
+    print(f"\nResults: {passed}/{len(items)} passed  |  traces sent to grader: {traces_captured}/{len(items)}")
     print(f"CSV:    {out_path}")
     print(f"Traces: {traces_path}")
 
@@ -307,6 +353,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dataset",
         default=_DEFAULT_DATASET,
         help=f"Path to JSONL dataset (default: {_DEFAULT_DATASET})",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=_DEFAULT_CONCURRENCY,
+        help=f"Number of examples to evaluate concurrently (default: {_DEFAULT_CONCURRENCY})",
     )
     return parser.parse_args(argv)
 
@@ -325,7 +377,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Error: dataset not found: {args.dataset}", file=sys.stderr)
         sys.exit(1)
 
-    asyncio.run(_run_eval(args.dataset))
+    asyncio.run(_run_eval(args.dataset, args.concurrency))
 
 
 if __name__ == "__main__":
